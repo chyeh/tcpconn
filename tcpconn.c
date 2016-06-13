@@ -24,6 +24,7 @@ int host_num = 0;
 
 char *myname = NULL;
 char *filename = NULL;
+int nqmFormat = 0;
 
 typedef struct host_entry
 {
@@ -54,12 +55,12 @@ void usage()
 
 int socket_set_noblock(int socket)
 {
-    int opts = fcntl(socket, F_GETFL, 0); 
+    int opts = fcntl(socket, F_GETFL, 0);
     opts = opts | O_NONBLOCK;
-    if( fcntl(socket, F_SETFL, opts) < 0 ) { 
+    if( fcntl(socket, F_SETFL, opts) < 0 ) {
         perror("set listen socket non-block error! ");
-        return -1; 
-    }   
+        return -1;
+    }
 
     return 0;
 }
@@ -103,7 +104,7 @@ void add_host(char *dst_host)
 		exit(1);
 	}
 	host_array[host_num].dest_quad = strdup(dest_quad);
-	
+
     host_num++;
 }
 
@@ -118,6 +119,12 @@ void tcpconn()
     fd_set readset, writeset;
     int used;
 
+    size_t name_width = 0;
+    for (i=0; i<host_num; i++)
+      if (strlen(host_array[i].dest_name) > name_width)
+        name_width = strlen(host_array[i].dest_name);
+    int width = (int)name_width;
+
     for (i=0; i<host_num; i++)
     {
         error = 0;
@@ -127,7 +134,7 @@ void tcpconn()
             perror("socket");
             exit(0);
         }
-        
+
         sin.sin_family=AF_INET;
         sin.sin_port=htons(dest_port);
 
@@ -141,17 +148,22 @@ void tcpconn()
         if (ret < 0) {
             perror("gettimeofday");
             exit(1);
-        } 
+        }
 
-        socket_set_noblock(fd); 
+        socket_set_noblock(fd);
 
         ret=connect(fd,(struct sockaddr *)&sin,sizeof(sin));
         if(ret!=0)
         {
             if (errno != EINPROGRESS)
             {
-                close(fd); 
-                fprintf(stdout, "Connected %s (%s:%d) failed.\n", host_array[i].dest_name, host_array[i].dest_quad, dest_port);
+                close(fd);
+                if (nqmFormat) {
+                  fprintf(stdout, "%-*s : -\n", width, host_array[i].dest_name);
+                }
+                else {
+                  fprintf(stdout, "Connected %s (%s:%d) failed.\n", host_array[i].dest_name, host_array[i].dest_quad, dest_port);
+                }
                 continue;
             }
         }
@@ -160,7 +172,7 @@ void tcpconn()
             goto calculate;
         }
 
-select_again:
+    select_again:
         to.tv_sec = timeout;
         to.tv_usec = 0;
 
@@ -183,15 +195,25 @@ select_again:
 
         if( ret == 0 )
         {
-            close(fd); 
-            fprintf(stdout, "Connected %s (%s:%d) timeout.\n", host_array[i].dest_name, host_array[i].dest_quad, dest_port);
+            close(fd);
+            if (nqmFormat) {
+              fprintf(stdout, "%-*s : -\n", width, host_array[i].dest_name);
+            }
+            else {
+              fprintf(stdout, "Connected %s (%s:%d) timeout.\n", host_array[i].dest_name, host_array[i].dest_quad, dest_port);
+            }
             continue;
         }
 
         if (getsockopt(fd,SOL_SOCKET,SO_ERROR,&error,&len) < 0)
         {
             close(fd);
-            fprintf(stdout, "Connected %s (%s:%d) failed.\n", host_array[i].dest_name, host_array[i].dest_quad, dest_port);
+            if (nqmFormat) {
+              fprintf(stdout, "%-*s : -\n", width, host_array[i].dest_name);
+            }
+            else {
+              fprintf(stdout, "Connected %s (%s:%d) failed.\n", host_array[i].dest_name, host_array[i].dest_quad, dest_port);
+            }
             continue;
         }
 
@@ -205,20 +227,36 @@ calculate:
                 exit(1);
             }
 
-            used = (tv_end.tv_sec - tv_start.tv_sec)*1000 + (tv_end.tv_usec - tv_start.tv_usec)/1000; 
+            used = (tv_end.tv_sec - tv_start.tv_sec)*1000 + (tv_end.tv_usec - tv_start.tv_usec)/1000;
 
-            fprintf(stdout, "Connected %s (%s:%d) - %d ms.\n", host_array[i].dest_name, host_array[i].dest_quad, dest_port, used ? used:1);
+            if (nqmFormat) {
+              float data = (float)(tv_end.tv_sec - tv_start.tv_sec)*(float)1000 + (float)(tv_end.tv_usec - tv_start.tv_usec)/(float)1000;
+              fprintf(stdout, "%-*s : %.3f\n", width, host_array[i].dest_name, data);
+            }
+            else {
+              fprintf(stdout, "Connected %s (%s:%d) - %d ms.\n", host_array[i].dest_name, host_array[i].dest_quad, dest_port, used ? used:1);
+            }
         }
         else if(error == ECONNRESET)
         {
+          if (nqmFormat) {
+            fprintf(stdout, "%-*s : -\n", width, host_array[i].dest_name);
+          }
+          else {
             fprintf(stdout, "Connected %s (%s:%d) reset by peer.\n", host_array[i].dest_name, host_array[i].dest_quad, dest_port);
+          }
         }
         else
         {
+          if (nqmFormat) {
+            fprintf(stdout, "%-*s : -\n", width, host_array[i].dest_name);
+          }
+          else {
             fprintf(stdout, "Connected %s (%s:%d) failed.\n", host_array[i].dest_name, host_array[i].dest_quad, dest_port);
+          }
         }
 
-        close(fd); 
+        close(fd);
     }
 }
 
@@ -230,28 +268,31 @@ int main(int argc, char **argv)
 
     memset(host_array, 0, sizeof(host_array));
 
-	while ((c = getopt(argc, argv, "hf:t:p:")) != -1) {
-		switch (c) {
-			case 'f':
-				filename = optarg;
-				break;
-			case 'p':
-				dest_port = atoi(optarg);
-				break;
-			case 'h':
-                usage();
-				break;
-			case 't':
-				timeout = atoi(optarg);
-				break;
-			default:
-				usage();
-		}
-	}
+  	while ((c = getopt(argc, argv, "hf:t:p:n")) != -1) {
+  		switch (c) {
+  			case 'f':
+  				filename = optarg;
+  				break;
+  			case 'p':
+  				dest_port = atoi(optarg);
+  				break;
+  			case 'h':
+          usage();
+  				break;
+  			case 't':
+  				timeout = atoi(optarg);
+  				break;
+        case 'n':
+    			nqmFormat=1;
+    			break;
+  			default:
+  				usage();
+  		}
+  	}
 
 
     argc -= optind;
-	argv += optind;
+  	argv += optind;
 
     if ( (*argv && filename) || (!*argv && !filename) )
     {
@@ -264,7 +305,7 @@ int main(int argc, char **argv)
             add_host( *argv );
             ++argv;
         }
-    }else if( filename )
+    } else if ( filename )
     {
         FILE *ping_file;
         char line[132];
@@ -304,5 +345,5 @@ int main(int argc, char **argv)
 
     tcpconn();
 
-    return 0;    
+    return 0;
 }
