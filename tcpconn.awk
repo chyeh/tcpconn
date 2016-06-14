@@ -1,4 +1,0 @@
-#!/usr/bin/awk -f
-
-$5{print $2" : "$5}
-!$5{print $2" : -"}
